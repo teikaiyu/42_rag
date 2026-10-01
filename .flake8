@@ -1,0 +1,2 @@
+[flake8]
+exclude = .venv, .mypy_cache, __pycache__, vllm-0.10.1
