@@ -3,7 +3,10 @@ name = "rag"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-	"fire"
+	"fire",
+	"pydantic",
+	"flake8",
+	"mypy"
 ]
 
 [dependency-groups]
