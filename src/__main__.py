@@ -1,6 +1,6 @@
-import sys
+# import sys
 # from pathlib import Path
-from fire.core import FireError, FireExit
+# from fire.core import FireError, FireExit
 import fire
 
 
@@ -38,7 +38,7 @@ class Orchestrator:
         """Answer a single query using the retrieved context."""
 
     def answer_dataset(
-            self, stuent_search_results_path: str, save_directory: str
+            self, student_search_results_path: str, save_directory: str
     ):
         """
         Generate answers for a dataset,
@@ -55,8 +55,4 @@ class Orchestrator:
 
 
 if __name__ == "__main__":
-    try:
-        fire.Fire(Orchestrator)
-    except (FireError, FireExit) as e:
-        print(f"Error while running Fire: {e}", file=sys.stderr)
-        sys.exit(1)
+    fire.Fire(Orchestrator)
