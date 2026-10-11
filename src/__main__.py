@@ -11,9 +11,6 @@ class Orchestrator:
         uv run python -m src <command> [options]
     """
 
-    def __init__(self):
-        pass
-
     def index(
             self, max_chunk_size: int = 2000
     ):
