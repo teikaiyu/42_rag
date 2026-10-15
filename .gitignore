@@ -1,2 +1,16 @@
-tests
+# Python artifacts (subject V.3: exclude Python artifacts)
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+
+# Virtual environment (recreated by `uv sync`)
 .venv
+
+# Local tests (not submitted or graded, subject V.3)
+tests
+
+# Corpus, index and outputs: generated during evaluation (subject X: no large data files or generated outputs)
+data/
+
+# Distributed archives (vLLM corpus, moulinette binaries): large, provided separately
+*.zip
