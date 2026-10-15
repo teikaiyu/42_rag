@@ -49,3 +49,8 @@ class StudentSearchResultsAndAnswer(BaseModel):
     """Retrieval results with generated answers for a whole dataset."""
     search_results: List[MinimalAnswer]
     k: int
+
+
+class Chunk(MinimalSource):
+    """Indexed chunk: its location in a corpus file and its text."""
+    text: str

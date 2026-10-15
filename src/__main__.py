@@ -3,6 +3,8 @@
 # from fire.core import FireError, FireExit
 import fire
 
+from .index import build_index
+
 
 class Orchestrator:
     """
@@ -12,9 +14,13 @@ class Orchestrator:
     """
 
     def index(
-            self, max_chunk_size: int = 2000
-    ):
+            self, max_chunk_size: int = 2000, raw_dir: str = "data/raw",
+            processed_dir: str = "data/processed"
+    ) -> None:
         """Ingest data/raw/ and build the index under data/processed/."""
+        count = build_index(raw_dir, processed_dir, max_chunk_size)
+        print(f"Ingestion complete! {count} chunks saved under "
+              f"{processed_dir}/")
 
     def search(
             self, query: str, k: int
