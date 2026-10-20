@@ -8,10 +8,11 @@ debug:
 	uv run python -m pdb -m src
 
 clean:
-	@rm -rf __pycache__ src/__pycache__ .mypy_cache .pytest_cache
+	@find . -name __pycache__ -not -path "./.venv/*" -prune -exec rm -rf {} +
+	@rm -rf .mypy_cache .pytest_cache data/processed
 
-fclean:
-	@rm -rf .venv __pycache__ src/__pycache__ .mypy_cache .pytest_cache
+fclean: clean
+	@rm -rf .venv
 
 lint:
 	uv run flake8 .
