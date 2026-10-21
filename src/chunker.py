@@ -1,6 +1,6 @@
 from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 
-from .data_models import Chunk
+from .data_models import MinimalSource
 
 
 def build_splitters(
@@ -22,15 +22,18 @@ def build_splitters(
 
 def chunk_text(
         file_path: str, text: str, splitter: RecursiveCharacterTextSplitter
-) -> list[Chunk]:
-    """Split text into chunks whose span satisfies text[first:last]."""
+) -> list[tuple[MinimalSource, str]]:
+    """Split text into chunks; return each chunk's location and text.
+
+    The location satisfies text[first:last] == chunk text.
+    """
     chunks = []
     for doc in splitter.create_documents([text]):
         start: int = doc.metadata["start_index"]
-        chunks.append(Chunk(
+        source = MinimalSource(
             file_path=file_path,
             first_character_index=start,
             last_character_index=start + len(doc.page_content),
-            text=doc.page_content,
-        ))
+        )
+        chunks.append((source, doc.page_content))
     return chunks

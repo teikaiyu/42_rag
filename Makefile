@@ -9,7 +9,7 @@ debug:
 
 clean:
 	@find . -name __pycache__ -not -path "./.venv/*" -prune -exec rm -rf {} +
-	@rm -rf .mypy_cache .pytest_cache data/processed
+	@rm -rf .mypy_cache .pytest_cache data/processed data/output
 
 fclean: clean
 	@rm -rf .venv

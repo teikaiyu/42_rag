@@ -35,6 +35,7 @@
 | `pyproject.toml` / `uv.lock` | `bm25s>=0.3.14`（lock は 0.3.14）、依存の numpy 2.5.4 |
 
 - 出力：`<processed_dir>/chunks.json` と `<processed_dir>/bm25/`（`data`、`indices`、`indptr` の `.npy` が3つ、`vocab.index.json`、`params.index.json`）
+- **2026-10-21 変更**：`chunks.json` は本文なしの `MinimalSource` のリストになり、`Chunk` クラスは削除した（search の議論 `SEARCH_DISCUSSION.md` Q6）。以下の記述で `Chunk` とあるのは変更前のもの
 - **`chunks.json` の i 番目 = BM25 の i 番目の文書**（docstring に明記。Q26）
 - 実測（作業用フォルダに展開した vLLM、1969ファイル）：14638チャンク、`index` 全体で約2.2秒、BM25 の索引 9.9MB、`chunks.json` 22MB
 - `load` した索引の文書数は `chunks.json` と一致（14638）
