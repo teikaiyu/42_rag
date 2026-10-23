@@ -1,9 +1,10 @@
-# import sys
+import sys
 # from pathlib import Path
 # from fire.core import FireError, FireExit
 import fire
 
 from .data_models import UnansweredQuestion
+from .evaluate import evaluate
 from .index import build_index
 from .search import search, search_dataset
 
@@ -57,11 +58,17 @@ class Orchestrator:
 
     def evaluate(
             self, student_search_results_path: str, dataset_path: str
-    ):
-        """
-        Report your own recall@k against a ground-truth dataset,
-        for your own testing.
-        """
+    ) -> None:
+        """Print recall@k of search results against a ground-truth dataset."""
+        matched, total, recalls = evaluate(
+            student_search_results_path, dataset_path
+        )
+        print(f"Matched {matched} of {total} questions")
+        if matched == 0:
+            print("Warning: no question_id matched. Check that both files "
+                  "come from the same dataset and that dataset_path is an "
+                  "AnsweredQuestions file.", file=sys.stderr)
+        print(" ".join(f"Recall@{k}: {r:.3f}" for k, r in recalls.items()))
 
 
 if __name__ == "__main__":
