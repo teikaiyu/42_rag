@@ -27,15 +27,31 @@ vLLM 0.10.1 のリポジトリを対象にした RAG システムの課題。要
 - moulinette を import したり呼び出したりしない
 - 正解の判定は「同じファイル」かつ「IoU 0.05 以上の重なり」
 
+## 全体の進捗（2026-10-24 時点）
+
+| パート | 状態 | 議論メモ |
+|---|---|---|
+| データモデル（`data_models.py`） | 済み。課題の8モデルのみ（`Chunk` は削除） | — |
+| index（`index.py`、`chunker.py`、`tokenizer.py`） | 済み。調整は evaluate の後に戻る | `INDEX_DISCUSSION.md` |
+| search / search_dataset（`search.py`） | 済み。小さな未決事項あり | `SEARCH_DISCUSSION.md` |
+| evaluate（`evaluate.py`） | 済み（2026-10-23 に一旦終了） | `EVALUATE_DISCUSSION.md` |
+| answer / answer_dataset | **未着手**（次の候補） | — |
+| index の調整（overlap、トークン化、BM25 のパラメータ、隠しディレクトリ） | 未着手。evaluate ができたので着手できる | `INDEX_DISCUSSION.md` の「3」 |
+| search の未決事項（点数0の結果、`search` の出力の解釈） | 未決 | `SEARCH_DISCUSSION.md` |
+| エラー処理（全コマンドまとめて） | 未着手。各メモの「既知の問題」「未決事項」に一覧 | 各メモ |
+| moulinette との比較 | 後回し（Mac では動かない。校舎の Linux で） | `EVALUATE_DISCUSSION.md` |
+| README | 未着手。各メモの「README に使えるポイント」が材料 | 各メモ |
+
+- 公開データでの recall@5（自作の evaluate）：**docs 0.870、code 0.677**（基準：docs 80%、code 50%）
+- index：1969ファイル、14638チャンク、約2秒。`search_dataset`：100問で約2.5秒
+
 ## 現在のリポジトリの状態
 
-- ルート：`src/`、`Makefile`、`pyproject.toml`、`README.md`、`uv.lock`、`.flake8`（src 以外はまだ手をつけない）
-- `src/__main__.py`：Fire の `Orchestrator` クラスの雛形。6コマンド（`index`、`search`、`search_dataset`、`answer`、`answer_dataset`、`evaluate`）の中身は空
-    - `answer_dataset` の引数名のタイポ（`stuent_...`）は修正済み
+- ルート：`src/`、`Makefile`、`pyproject.toml`、`README.md`、`uv.lock`、`.flake8`、議論メモ（`*_DISCUSSION.md`）
+- `src/__main__.py`：Fire の `Orchestrator` クラス。`index`、`search`、`search_dataset`、`evaluate` は実装済み。`answer`、`answer_dataset` の中身は空
     - `fire.Fire` を囲む try/except は外す方針（Fire は `--help` 表示後も `FireExit` を投げるため）
-- データモデル：要件 VI.4 の8モデルを1ファイルに統合する方針。docstring は1行
-- `datasets_public/` は容量節約のため作業ツリーから削除中。配布 zip にあるので、必要になったら戻す
-- **以前作った index の実装（自作の BM25 を含む）はすべて削除済み。** `src/index.py` は空 方針違反（ライブラリを使わず自作した）だったため
+- `make clean` は全ての `__pycache__`、`.mypy_cache`、`.pytest_cache`、`data/processed`、`data/output` を消す
+- 作業ツリーにあるが git の管理外：`data/raw/vllm-0.10.1/`（展開済み）、`datasets_public/public/`（公開データセット。`data/datasets/` には移していない）、`moulinette-ubuntu`/`-fedora`、`tests/`（ローカル専用）
 
 ## 設計の方針
 
