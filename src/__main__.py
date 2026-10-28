@@ -4,9 +4,10 @@ import sys
 import fire
 
 from .data_models import UnansweredQuestion
-from .evaluate import evaluate
 from .index import build_index
 from .search import search, search_dataset
+from .answer import SmallLLMModel, answer, answer_dataset
+from .evaluate import evaluate
 
 
 class Orchestrator:
@@ -44,17 +45,33 @@ class Orchestrator:
         print(f"Saved student_search_results to {path}")
 
     def answer(
-            self, query: str, k: int
-    ):
-        """Answer a single query using the retrieved context."""
+            self, query: str, k: int, processed_dir: str = "data/processed",
+            show_retrieved_sources: bool = False
+    ) -> None:
+        """Print the answer to a single query.
+
+        With show_retrieved_sources, also print the sources it was based on.
+        """
+        # Fire passes a numeric-only query as int.
+        question = UnansweredQuestion(question=str(query))
+        res = answer(search(question, k, processed_dir), llm=SmallLLMModel())
+        print()
+        print(res.answer)
+        if show_retrieved_sources:
+            print()
+            for s in res.retrieved_sources:
+                print(f"{s.file_path} "
+                      f"[{s.first_character_index}:{s.last_character_index}]")
 
     def answer_dataset(
             self, student_search_results_path: str, save_directory: str
-    ):
+    ) -> None:
+        """Answer every question of a search results file.
+
+        Write a StudentSearchResultsAndAnswer file under save_directory.
         """
-        Generate answers for a dataset,
-        producing a StudentSearchResultsAndAnswer JSON file.
-        """
+        path = answer_dataset(student_search_results_path, save_directory)
+        print(f"Saved student_search_results_and_answer to {path}")
 
     def evaluate(
             self, student_search_results_path: str, dataset_path: str

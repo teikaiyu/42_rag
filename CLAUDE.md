@@ -2,7 +2,7 @@
 
 vLLM 0.10.1 のリポジトリを対象にした RAG システムの課題。要件の全文は `subject.RAG_against_the_machine.en.pdf`（v2.0、英語の原文）を参照。翻訳を挟まないため、これを正とする。
 このファイルは、これまでの議論で決まったこと・分かったこと・未決事項をまとめたもの。
-`index` 実装以降の議論（質問ごと、未回答の確認の質問、次にやること）は `INDEX_DISCUSSION.md` にある。`search` の議論は `SEARCH_DISCUSSION.md`、`evaluate` の議論は `EVALUATE_DISCUSSION.md` にある。
+`index` 実装以降の議論（質問ごと、未回答の確認の質問、次にやること）は `INDEX_DISCUSSION.md` にある。`search` の議論は `SEARCH_DISCUSSION.md`、`evaluate` の議論は `EVALUATE_DISCUSSION.md`、`answer` の議論は `ANSWER_DISCUSSION.md` にある。
 
 ## 進め方のルール（最重要）
 
@@ -27,6 +27,19 @@ vLLM 0.10.1 のリポジトリを対象にした RAG システムの課題。要
 - moulinette を import したり呼び出したりしない
 - 正解の判定は「同じファイル」かつ「IoU 0.05 以上の重なり」
 
+## 用語（2026-10-25 ユーザーと決定。説明とメモはこれにそろえる）
+
+| 用語 | 指すもの |
+|---|---|
+| **ラン**（run） | データセット全体の検索結果（`search_dataset` の出力、`StudentSearchResults`）。情報検索の評価での標準的な言葉 |
+| **ヒット**（hit） | 検索結果の1件（`retrieved_sources` の要素） |
+| **グラウンドトゥルース**（ground truth） | 答え合わせのデータセット全体（`AnsweredQuestions` のファイル） |
+| **ゴールドソース**（gold source） | グラウンドトゥルースの中の、質問ごとの正しいソース1件（`sources` の要素） |
+| **コンテキスト**（context） | Qwen に渡すときのヒットの本文 |
+
+- 「正解」は Qwen の答えやデータセットの `answer` と紛れるので使わない
+- 「ヒット率」（hit rate@k）は recall@k とは別の指標。ゴールドソースが1つの公開データでは同じ値になるが、言い分ける
+
 ## 全体の進捗（2026-10-24 時点）
 
 | パート | 状態 | 議論メモ |
@@ -35,12 +48,14 @@ vLLM 0.10.1 のリポジトリを対象にした RAG システムの課題。要
 | index（`index.py`、`chunker.py`、`tokenizer.py`） | 済み。調整は evaluate の後に戻る | `INDEX_DISCUSSION.md` |
 | search / search_dataset（`search.py`） | 済み。小さな未決事項あり | `SEARCH_DISCUSSION.md` |
 | evaluate（`evaluate.py`） | 済み（2026-10-23 に一旦終了） | `EVALUATE_DISCUSSION.md` |
-| answer / answer_dataset | **未着手**（次の候補） | — |
+| answer / answer_dataset | **着手**（2026-10-24〜）。transformers と PyTorch を使う | `ANSWER_DISCUSSION.md` |
 | index の調整（overlap、トークン化、BM25 のパラメータ、隠しディレクトリ） | 未着手。evaluate ができたので着手できる | `INDEX_DISCUSSION.md` の「3」 |
 | search の未決事項（点数0の結果、`search` の出力の解釈） | 未決 | `SEARCH_DISCUSSION.md` |
 | エラー処理（全コマンドまとめて） | 未着手。各メモの「既知の問題」「未決事項」に一覧 | 各メモ |
 | moulinette との比較 | 後回し（Mac では動かない。校舎の Linux で） | `EVALUATE_DISCUSSION.md` |
+| **審査の Linux マシンのデバイスの確認と、torch の指定の判断** | 後回し（校舎の Linux で）。NVIDIA の GPU があるかを確かめ、今の「Linux は CPU 専用の torch」（`pyproject.toml` の `[tool.uv.sources]`）のままでよいかを決める。あわせて `uv sync` と answer が Linux で動くかも確かめる | `ANSWER_DISCUSSION.md` |
 | README | 未着手。各メモの「README に使えるポイント」が材料 | 各メモ |
+| Makefile | 済み（2026-10-28）。install、run、debug、clean、lint が動くことを確認。`mypy .` が `data/raw/` の vLLM まで調べて止まっていたので、`pyproject.toml` の `[tool.mypy] exclude = ["^data/"]` で除外（課題のコマンドは変えない）。`.PHONY` から未定義の `test` を削除。lint-strict（任意）は tqdm、bm25s、fire に型情報がなく失敗する | — |
 
 - 公開データでの recall@5（自作の evaluate）：**docs 0.870、code 0.677**（基準：docs 80%、code 50%）
 - index：1969ファイル、14638チャンク、約2秒。`search_dataset`：100問で約2.5秒

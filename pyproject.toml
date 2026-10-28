@@ -10,9 +10,30 @@ dependencies = [
 	"langchain-text-splitters>=1.1.3",
 	"tqdm>=4.70.1",
 	"bm25s>=0.3.14",
+	"transformers>=5.20.2",
+	"torch>=2.14.1",
 ]
 
 [dependency-groups]
 dev = [
 	"pytest"
 ]
+
+# On Linux, PyPI's torch is a CUDA build that pulls about 2.3 GB of NVIDIA
+# libraries (cuBLAS, cuDNN, ...) even on machines without an NVIDIA GPU,
+# because uv picks packages by OS and CPU only and never looks at the GPU.
+# Take torch from PyTorch's CPU-only index on Linux to skip them.
+# Trade-off: an NVIDIA GPU on Linux is not used; answers run on the CPU.
+# macOS keeps the PyPI build, which includes Apple's MPS (GPU) support.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+# `mypy .` (required by the subject) would also check the indexed vLLM
+# sources under data/raw/, which are not our code.
+[tool.mypy]
+exclude = ["^data/"]
