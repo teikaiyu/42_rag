@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 import uuid
 from typing import List
 
@@ -6,8 +6,17 @@ from typing import List
 class MinimalSource(BaseModel):
     """Location of a text span in a corpus file."""
     file_path: str
-    first_character_index: int
-    last_character_index: int
+    first_character_index: int = Field(ge=0)
+    last_character_index: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def check_order(self) -> "MinimalSource":
+        """Reject a span that ends before it starts."""
+        if self.first_character_index > self.last_character_index:
+            raise ValueError(
+                "first_character_index is after last_character_index"
+            )
+        return self
 
 
 class UnansweredQuestion(BaseModel):

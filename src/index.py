@@ -65,10 +65,19 @@ def chunk_text(
 
 
 def collect_files(raw_dir: Path) -> list[Path]:
-    """Return target files under raw_dir, sorted by path."""
+    """Return target files under raw_dir, sorted by path.
+
+    Warn about directories that cannot be read (rglob skips them silently).
+    Symbolic links to directories are not followed.
+    """
+    def warn(e: OSError) -> None:
+        print(f"Warning: skipped {e.filename}: {e.strerror}", file=sys.stderr)
+
+    files = []
+    for root, _, names in os.walk(raw_dir, onerror=warn):
+        files += [Path(root, name) for name in names]
     return sorted(
-        p for p in raw_dir.rglob("*")
-        if p.is_file() and p.suffix in TARGET_SUFFIXES
+        p for p in files if p.is_file() and p.suffix in TARGET_SUFFIXES
     )
 
 
@@ -104,6 +113,13 @@ def build_index(raw_dir: str, processed_dir: str, max_chunk_size: int) -> int:
         # A path relative to the working directory, so an absolute raw_dir
         # still gives data/raw/... as the grader expects.
         file_path = Path(os.path.relpath(path)).as_posix()
+        # A name that is not UTF-8 cannot be saved in the JSON index.
+        try:
+            file_path.encode("utf-8")
+        except UnicodeEncodeError:
+            tqdm.write(f"Warning: skipped {path}: the file name is not UTF-8",
+                       file=sys.stderr)
+            continue
         for source, chunk in chunk_text(
                 file_path, text, splitters[path.suffix]):
             sources.append(source)
@@ -119,11 +135,10 @@ def build_index(raw_dir: str, processed_dir: str, max_chunk_size: int) -> int:
         )
     retriever = bm25s.BM25()
     retriever.index(tokens)
+    chunks_json = TypeAdapter(list[MinimalSource]).dump_json(sources)
     # Build everything before writing, so only the writes can fail here.
     try:
-        (out / CHUNKS_FILE).write_bytes(
-            TypeAdapter(list[MinimalSource]).dump_json(sources)
-        )
+        (out / CHUNKS_FILE).write_bytes(chunks_json)
         retriever.save(str(out / BM25_DIR))
     except BaseException:
         print(f"Warning: saving the index failed; the files under "

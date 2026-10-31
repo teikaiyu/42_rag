@@ -14,16 +14,24 @@ MODEL = "Qwen/Qwen3-0.6B"
 MAX_NEW_TOKENS = 256
 SYSTEM_PROMPT = (
     "You answer questions about the vLLM codebase. Use only the context "
-    "given by the user. If it does not contain the answer, say that the "
-    "context does not contain it. Answer in a few sentences; do not write "
-    "links or file paths."
+    "given by the user. Answer in a few sentences."
 )
+NO_SOURCE_ANSWER = "No source in the corpus matches the question."
+UNREADABLE_ANSWER = "None of the retrieved sources could be read."
 
 
 def read_source(source: MinimalSource) -> str:
-    """Return the text a source points to in its corpus file."""
+    """Return the text a source points to in its corpus file.
+
+    Raise if the span goes past the end of the file.
+    """
     # Read like build_index did, so the character indices line up.
     text = Path(source.file_path).read_text(encoding="utf-8")
+    if source.last_character_index > len(text):
+        raise ValueError(
+            f"{source.file_path} has {len(text)} characters, fewer than "
+            f"last_character_index {source.last_character_index}"
+        )
     return text[source.first_character_index:source.last_character_index]
 
 
@@ -78,22 +86,31 @@ def answer(
     """Answer a question from the text of its retrieved sources.
 
     The context is only the source texts: with file paths in it, the model
-    copied them into made-up links. The question id, text and sources are
-    copied from retrieved unchanged; only the answer text comes from the
-    model.
+    copied them into made-up links. A source that cannot be read is skipped
+    with a warning. With no source, or none readable, the model is not
+    called (it would make up an answer) and the answer is a fixed text. The
+    question id, text and sources are copied from retrieved unchanged.
     """
-    context = "\n\n".join(
-        read_source(source) for source in retrieved.retrieved_sources
-    )
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user",
-         "content": f"Context:\n{context}\n\nQuestion: {retrieved.question}"},
-    ]
-    return MinimalAnswer(
-        **retrieved.model_dump(),
-        answer=llm.generate(messages)
-    )
+    texts = []
+    for source in retrieved.retrieved_sources:
+        try:
+            texts.append(read_source(source))
+        except (OSError, ValueError) as e:
+            tqdm.write(f"Warning: skipped a source of question "
+                       f"{retrieved.question_id}: {e}", file=sys.stderr)
+    if not retrieved.retrieved_sources:
+        reply = NO_SOURCE_ANSWER
+    elif not texts:
+        reply = UNREADABLE_ANSWER
+    else:
+        context = "\n\n".join(texts)
+        reply = llm.generate([
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user",
+             "content": f"Context:\n{context}\n\n"
+                        f"Question: {retrieved.question}"},
+        ])
+    return MinimalAnswer(**retrieved.model_dump(), answer=reply)
 
 
 def answer_dataset(

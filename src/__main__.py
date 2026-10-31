@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 
 import fire
 from pydantic import ValidationError
@@ -34,6 +35,20 @@ def question_of(query: object) -> UnansweredQuestion:
     if not text.strip():
         raise ValueError("the query must not be empty")
     return UnansweredQuestion(question=text)
+
+
+def check_not_overwritten(input_path: str, save_directory: str) -> None:
+    """Raise if saving under save_directory would overwrite input_path.
+
+    The output file is named after the input file, so it is the input
+    itself when save_directory is the input's directory.
+    """
+    output = Path(save_directory) / Path(input_path).name
+    if output.resolve() == Path(input_path).resolve():
+        raise ValueError(
+            f"--save_directory {save_directory} would overwrite the input "
+            f"{input_path}; choose another directory"
+        )
 
 
 class Orchestrator:
@@ -73,6 +88,7 @@ class Orchestrator:
             processed_dir: str = "data/processed"
     ) -> None:
         """Search a whole dataset and write a StudentSearchResults file."""
+        check_not_overwritten(dataset_path, save_directory)
         k = positive_int("k", k)
         path = search_dataset(dataset_path, k, save_directory, processed_dir)
         print(f"Saved student_search_results to {path}")
@@ -103,6 +119,7 @@ class Orchestrator:
 
         Write a StudentSearchResultsAndAnswer file under save_directory.
         """
+        check_not_overwritten(student_search_results_path, save_directory)
         path = answer_dataset(student_search_results_path, save_directory)
         print(f"Saved student_search_results_and_answer to {path}")
 
@@ -125,8 +142,6 @@ def main() -> None:
     """Run the CLI; report errors in one line instead of a traceback."""
     try:
         fire.Fire(Orchestrator)
-    except KeyboardInterrupt:
-        sys.exit(130)
     except ValidationError as e:
         first = e.errors()[0]
         where = ".".join(str(part) for part in first["loc"])

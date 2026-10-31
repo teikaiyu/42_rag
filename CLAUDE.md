@@ -55,7 +55,7 @@ vLLM 0.10.1 のリポジトリを対象にした RAG システムの課題。要
 | moulinette との比較 | 後回し（Mac では動かない。校舎の Linux で） | `EVALUATE_DISCUSSION.md` |
 | **審査の Linux マシンのデバイスの確認と、torch の指定の判断** | 後回し（校舎の Linux で）。NVIDIA の GPU があるかを確かめ、今の「Linux は CPU 専用の torch」（`pyproject.toml` の `[tool.uv.sources]`）のままでよいかを決める。あわせて `uv sync` と answer が Linux で動くかも確かめる | `ANSWER_DISCUSSION.md` |
 | README | 未着手。各メモの「README に使えるポイント」が材料 | 各メモ |
-| Makefile | 済み（2026-10-28）。install、run、debug、clean、lint が動くことを確認。`mypy .` が `data/raw/` の vLLM まで調べて止まっていたので、`pyproject.toml` の `[tool.mypy] exclude = ["^data/"]` で除外（課題のコマンドは変えない）。`.PHONY` から未定義の `test` を削除。lint-strict（任意）は tqdm、bm25s、fire に型情報がなく失敗する | — |
+| Makefile | 済み（2026-10-28）。install、run、debug、clean、lint が動くことを確認。`mypy .` が `data/raw/` の vLLM まで調べて止まっていたので、`pyproject.toml` の `[tool.mypy] exclude = ["^data/"]` で除外（課題のコマンドは変えない）。`.PHONY` から未定義の `test` を削除。lint-strict（任意）も 2026-10-31 に通るようにした（tqdm は dev グループに `types-tqdm` を追加、型情報のない bm25s と fire は `[[tool.mypy.overrides]]` の `ignore_missing_imports` で名指しして除外） | — |
 
 - 公開データでの recall@5（自作の evaluate）：**docs 0.870、code 0.677**（基準：docs 80%、code 50%）
 - index：1969ファイル、14638チャンク、約2秒。`search_dataset`：100問で約2.5秒

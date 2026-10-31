@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 from .data_models import (
@@ -42,6 +43,10 @@ def evaluate(
     dataset = RagDataset.model_validate_json(Path(dataset_path).read_bytes())
     retrieved = {r.question_id: r.retrieved_sources
                  for r in results.search_results}
+    duplicated = len(results.search_results) - len(retrieved)
+    if duplicated:
+        print(f"Warning: {duplicated} search results repeat a question_id; "
+              f"the last one of each is used", file=sys.stderr)
     answered = [q for q in dataset.rag_questions
                 if isinstance(q, AnsweredQuestion) and q.sources]
     recalls: dict[int, float] = {}

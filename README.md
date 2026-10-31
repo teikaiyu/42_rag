@@ -51,6 +51,13 @@ data/datasets/UnansweredQuestions/*.json     # questions
 data/datasets/AnsweredQuestions/*.json       # questions with their gold sources
 ```
 
+The provided `vllm-0.10.1.zip` contains only the `vllm-0.10.1/` folder, so
+create `data/raw/` and unzip it there:
+
+```bash
+mkdir -p data/raw && unzip vllm-0.10.1.zip -d data/raw
+```
+
 Generated files go to `data/processed/` (the index) and `data/output/`
 (search results and answers). Every input and output path is a CLI argument.
 
@@ -180,37 +187,81 @@ state.
   - one-character tokens and the 33 Lucene English stop words are dropped.
 - **Ranking**: the top k chunks by BM25 score, highest first
   (`retrieve(..., sorted=True)`). A `k` larger than the number of chunks is cut
-  to that number.
+  to that number, and hits with a score of 0 are dropped, so a question can
+  get fewer than k sources.
 
 ## Answer generation
 
 - **Model**: Qwen/Qwen3-0.6B with `transformers` and PyTorch, loaded once per
   command. It runs in bfloat16 on a GPU or Apple MPS when one is available,
   and in float32 on the CPU otherwise.
-- **Prompt**: a system message asks the model to use only the given context, to
-  say so when the context does not contain the answer, to answer in a few
-  sentences, and not to write links or file paths. The user message is the
-  text of the retrieved chunks followed by the question.
+- **Prompt**: the system message is *"You answer questions about the vLLM
+  codebase. Use only the context given by the user. Answer in a few
+  sentences."* The user message is the text of the retrieved chunks, without
+  file paths, followed by the question (`Context:\n...\n\nQuestion: ...`).
+  See [Prompt strategy](#prompt-strategy) for how it was chosen.
+- **No model call without context**: a question with no hit gets the fixed
+  answer *"No source in the corpus matches the question."* A source that
+  cannot be read (missing file, span past the end of the file) is skipped
+  with a warning; if none can be read, the answer is *"None of the retrieved
+  sources could be read."* In both cases the model would only make up an
+  answer.
 - **Decoding**: greedy (`do_sample=False`), at most 256 new tokens, thinking
   mode off (`enable_thinking=False`), so runs are reproducible and short.
 
+### Prompt strategy
+
+The prompt follows the usual RAG prompt pattern (a role, "use only the given
+context", "keep it short"), as in LangChain's `rlm/rag-prompt`. Grounding
+comes mainly from the context itself: the model sees only the retrieved text.
+
+We compared five system messages on the same 16 questions (8 docs, 4 code,
+4 unrelated to vLLM such as "What is the capital of France?"), on CPU:
+
+| System message | Median answer length (docs) | Time per question (docs) |
+|---|---|---|
+| the three sentences above | **110 characters** | **21.5 s** |
+| the same plus "If it does not contain the answer, say so" | 144 | 22.1 s |
+| "Use only the context given by the user." only | 258 | 30.8 s |
+| "Answer in a few sentences." only | 488 | 33.1 s |
+| none | 369 | 32.6 s |
+
+- The three sentences together make answers about a third as long and about
+  30% faster than no system message, with no clear change in correctness
+  (checked by hand against the reference answers; each variant got some
+  questions right that another got wrong). Single sentences do not give the
+  same effect, so we keep the set and do not claim an effect for each
+  sentence. Sixteen questions are a small sample.
+- "Say so when the context does not contain the answer" was dropped: the
+  model declined only one of the four unrelated questions, and only partly.
+- An earlier "do not write links or file paths" was dropped too: alone it
+  barely changed anything; what removed most made-up links was taking the
+  file paths out of the context.
+
 ## Performance analysis
 
-Measured on an Apple M3 Mac with the public datasets, `search_dataset --k 10`,
-`max_chunk_size=2000`.
+Measured with the public datasets, `search_dataset --k 10` and
+`max_chunk_size=2000`. Recall is the score of the provided moulinette
+(`moulinette-ubuntu evaluate_student_search_results ... --k 10
+--max_context_length 2000`) on the school's Ubuntu 22.04 machines; our own
+`evaluate` gives the same numbers.
 
 | Dataset | Recall@1 | @3 | @5 | @10 | Required @5 |
 |---|---|---|---|---|---|
 | docs (100 questions) | 0.600 | 0.800 | **0.870** | 0.870 | 0.80 |
 | code (99 questions) | 0.444 | 0.636 | **0.677** | 0.788 | 0.50 |
 
-| Step | Time | Limit |
+| Step | Time (school Linux, CPU) | Limit |
 |---|---|---|
-| `index` (1969 files, 14638 chunks, 12 MB) | about 20 s for the whole command | 5 min |
-| `search_dataset` (100 questions) | about 4 s for the whole command | 90 s for 200 questions |
+| `index` (1969 files, 14638 chunks, 12 MB) | about 10–20 s for the whole command | 5 min |
+| `search_dataset` (100 questions) | about 8 s for the whole command | 90 s for 200 questions |
+| `answer_dataset` (100 questions, 10 sources each) | about 22–25 s per question | none |
 
-Most of the command time is Python start-up and imports; the BM25 work itself
-takes a few seconds. Docs questions are easier than code questions because
+Most of the `index` and `search_dataset` time is Python start-up and imports;
+the BM25 work itself takes a few seconds. `answer_dataset` is slow on a
+CPU-only machine because the model reads up to 10 chunks (up to 20,000
+characters) per question; on an Apple M3 GPU (MPS) it took about 5.5 s per
+question. Docs questions are easier than code questions because
 their wording is close to the prose of the documentation; code questions often
 describe behaviour in words that do not appear in the code.
 
@@ -245,11 +296,22 @@ describe behaviour in words that do not appear in the code.
   `max_chunk_size` must be positive integers, and the query must not be blank.
   `main()` then catches any remaining exception and prints one `Error: ...` line
   to stderr with exit code 1 (pydantic errors name the model and the field).
-  Fire's own usage errors and `--help` are left to Fire. `index` skips a file
-  it cannot read with a warning, fails without saving anything when there is
-  nothing to index or no searchable word, and names `processed_dir` when a file
-  is in its way. A failed write in `index`, `search_dataset` or
-  `answer_dataset` adds a warning that the output may be incomplete.
+  Fire's own usage errors and `--help` are left to Fire, and so is Ctrl+C
+  (`KeyboardInterrupt` is not an `Exception`). On top of that:
+  - `index` skips a file it cannot read, a directory it cannot list, or a
+    file whose name is not UTF-8, each with a warning. It fails without
+    saving anything when there is nothing to index or no searchable word, and
+    names `processed_dir` when a file is in its way.
+  - `search` reports a missing index, and reports a broken or mixed-up index
+    (unreadable files, or `chunks.json` and `bm25/` with different numbers of
+    chunks) with one message that asks to run `index` again.
+  - `search_dataset` and `answer_dataset` refuse a `--save_directory` that
+    would overwrite their input (the output file has the input's name).
+  - `MinimalSource` rejects negative indices and a first index after the last
+    one, so a hand-made input file cannot silently point to the wrong text.
+  - `evaluate` warns when a `question_id` appears twice.
+  - A failed write in `index`, `search_dataset` or `answer_dataset` adds a
+    warning that the output may be incomplete.
 
 ## Challenges faced
 
@@ -263,11 +325,17 @@ describe behaviour in words that do not appear in the code.
   `SystemExit`, which a plain `except Exception` does not break.
 - **Made-up links in answers**, solved by giving the model text only.
 - **The moulinette is a Linux x86-64 binary** and does not run on an Apple
-  Silicon Mac, so recall was checked with our own `evaluate`, which follows
-  the same rule.
+  Silicon Mac, so recall was first checked with our own `evaluate`, which
+  follows the same rule, and later confirmed with the moulinette on the
+  school's Linux machines (same numbers).
 - **Score-0 hits**: bm25s returns k chunks even when none contains a word of
   the question. Hits with score 0 are dropped, so a question can get fewer
   than k sources (the moulinette treats k as a maximum).
+- **The limits of a 0.6B model**: it answers questions unrelated to vLLM
+  from its own knowledge ("The capital of France is Paris.") instead of
+  declining, and it can follow the context too closely (asked for the boiling
+  point of water, it answered with a weather example found in the chunks).
+  No system message we tried fixed either.
 - **A half-written index**: `chunks.json` and `bm25/` must match. Everything
   that can fail (chunking, an empty vocabulary with a very small
   `--max_chunk_size`) now happens before the first write; if a write itself
@@ -291,6 +359,8 @@ describe behaviour in words that do not appear in the code.
 - [Lucene `word_delimiter_graph` token filter](https://www.elastic.co/guide/en/elasticsearch/reference/current/analysis-word-delimiter-graph-tokenfilter.html).
 - [Qwen/Qwen3-0.6B model card](https://huggingface.co/Qwen/Qwen3-0.6B) and the
   [transformers text generation guide](https://huggingface.co/docs/transformers/llm_tutorial).
+- LangChain's `rlm/rag-prompt`, as used in the
+  [LangChain Hub RetrievalQA cookbook](https://docs.smith.langchain.com/cookbook/hub-examples/retrieval-qa-chain).
 - [Python Fire guide](https://google.github.io/python-fire/guide/) and the
   [uv documentation](https://docs.astral.sh/uv/).
 
@@ -308,5 +378,8 @@ Claude (Anthropic's Claude Code) was used as a pair-programming assistant:
   reviewed, changed or rewritten before being kept; design choices were made
   by the author.
 - **Testing**: running edge cases (empty query, `k=0`, missing files,
-  malformed JSON, bad paths) and measuring recall and timing.
+  malformed JSON, bad paths, broken indexes, wrong input files) and measuring
+  recall and timing.
+- **Experiments**: comparing system messages on the same questions (see
+  [Prompt strategy](#prompt-strategy)).
 - **Writing**: drafting this README from the project's development notes.

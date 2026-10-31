@@ -38,7 +38,7 @@
 
 - `make run` と `make debug` に `ARGS` を足すか（Q6。提案済み、返事待ち）
 - 最後の砦が pdb の post-mortem を止めてしまう点、pdb の `q` で `Error:`（中身なし）と出る点（Q6）
-- 試していないもの：Ctrl+C、モデルのダウンロードの失敗（ネットがない）、`bm25/` だけが欠けた索引、`chunks.json` が壊れた索引、読み取り専用の `save_directory`
+- ~~試していないもの：Ctrl+C、モデルのダウンロードの失敗（ネットがない）、`bm25/` だけが欠けた索引、`chunks.json` が壊れた索引、読み取り専用の `save_directory`~~ → Q14 ですべて確認（2026-10-31）。トレースバックは0件。直すかを決める問題は 14-9
 
 ---
 
@@ -241,7 +241,158 @@
 - **Q11（`processed_dir` のパスの誤り）**：`mkdir` を index の最初（ファイル収集の後、チャンク分割の前）に移し、`FileExistsError` と `NotADirectoryError` をタプルで捕まえて `processed_dir is not a directory path (a file is in the way): <path>`
 - **点数0の結果**：bm25s が返した点数0のヒットを捨てる。moulinette の `--k` は「質問ごとのソースの最大数」なので、k 件より少なくてよい。単一の `search` で0件なら、標準エラー出力に `No source contains a word of the query.`
 - **確認**：上の4つとも動作を確認。recall は変わらず（docs @5 0.870、code @5 0.677）。公開データでは全問が10件のまま（点数0のヒットはなかった）
-- answer で0件のときは、空のコンテキストで Qwen を呼ぶ（試していない）
+- answer で0件のときは、空のコンテキストで Qwen を呼ぶ（Q14 で確認）
+
+### Q14. 起こりうるエラーをすべて調査（2026-10-31、校舎の Linux）
+
+- **方法**：処理の段階（CLI の引数 → ファイルの読み込み → 処理 → 書き込み → 外からの要因）ごとに洗い出し、Ubuntu 22.04（x86-64）で実際に動かした。Q1・Q8 で確かめたものに加えて約70件。**トレースバックは0件**
+- **前提**：vLLM のコーパスは GitHub の `v0.10.1` のタグ（課題の添付は intra のセキュリティで `wget` からダウンロードできなかった）。グラウンドトゥルースの199ソースはすべて存在し、範囲もファイルに収まる。moulinette の結果は docs @5 0.870、code @5 0.677 で、自作の evaluate と完全に一致
+- 評価の記号：○ = 問題なし、△ = 落ちないが、メッセージが分かりにくい・黙って起きる、✕ = 落ちないが、データが消える・結果が黙って変わる
+
+#### 14-1. CLI の引数（Fire の解釈）
+
+| 入力 | 結果 | 終了コード | 評価 |
+|---|---|---|---|
+| 必須の引数がない、知らないコマンド、知らないフラグ | Fire の `ERROR: ...` ＋ Usage | 2 | ○ |
+| 引数なし、`--help` | ヘルプ | 0 | ○ |
+| `--k 0` / `abc` / `1.5` / `1e1` / `03` / `' 3'` / 値なし | `Error: --k must be a positive integer, got ...`（`1e1` は `10.0`、`03` は `'03'`、値なしは `True` として届く） | 1 | ○ |
+| `--max_chunk_size 2000.0` | 同じ様式で弾く | 1 | ○ |
+| `--k=3` | 正常 | 0 | ○ |
+| `--k 1 --k 2` | **後ろが勝つ**（2件） | 0 | ○（Fire の仕様） |
+| `search lora 3 extra` | 余った `extra` が3つ目の位置引数 `processed_dir` になる → `Error: no index under extra; ...` | 1 | △ |
+| クエリ `None` | Fire が `None` にする → `str` で `"None"` → `none` で検索される | 0 | ○（偶然うまくいく） |
+| クエリ `[1,2]` / `{a: 1}` / `-1` | Fire がリスト・辞書・数値にする → `str` にして検索。1文字のトークンは捨てるので0件 | 0 | ○ |
+| クエリ `--lora` | フラグとして食われ、`query` がないという Fire のエラー | 2 | ○（Fire の仕様） |
+| ストップワードだけ（`the a of`）、日本語だけ | `No source contains a word of the query.` | 0 | ○ |
+| 20万字のクエリ | シェルの `argument list too long`（Python が起動する前） | 127 | ○（範囲外） |
+
+#### 14-2. 索引（`processed_dir`）の読み込み
+
+| 状態 | 結果 | 評価 |
+|---|---|---|
+| ない、ファイルを指している | `Error: no index under ...; run the index command first` | ○ |
+| `chunks.json` はあるが `bm25/` がない | `Error: [Errno 2] No such file or directory: '.../bm25/params.index.json'` | △ 索引を作り直せと言わない |
+| `chunks.json` が壊れている（形が違う） | `Error: invalid list[MinimalSource] data at 0.file_path: ...` | △ 同上 |
+| `chunks.json` が途中で切れている（書き込みの失敗の後） | `Error: invalid list[MinimalSource] data: Invalid JSON: EOF while parsing ...` | △ 同上 |
+| `bm25/` のファイルが壊れている | `Error: unexpected character, expected a JSON value: ...` | △ 何のファイルか分からない |
+| `chunks.json` が `bm25/` より短い（別々の index の組み合わせ） | `Error: list index out of range` | △ **原因がまったく分からない** |
+| `chunks.json` が `bm25/` より長い | （試していない。BM25 の番号は範囲内なので、**黙って違う位置を返す**はず。Q9 で確認したのと同じ現象） | ✕ |
+
+- `chunks.json` の件数と BM25 の文書数を比べれば、最後の2つは見分けられる（未実装）
+
+#### 14-3. データセット・検索結果のファイル（search_dataset、evaluate、answer_dataset の入力）
+
+| 入力 | 結果 | 評価 |
+|---|---|---|
+| ない、ディレクトリ | `Error: [Errno 2] ...` / `[Errno 21] Is a directory` | ○ |
+| 0バイト、バイナリ、壊れた JSON | `Error: invalid RagDataset data: Invalid JSON: ...` | ○ |
+| トップがリスト（`[]`） | `Error: invalid RagDataset data: Input should be an object` | ○ |
+| `question` がない・数値 | `Error: invalid RagDataset data at rag_questions.0.AnsweredQuestion.question: ...` | △ Unanswered のデータセットでも `AnsweredQuestion` と出る（union の最初の候補のエラーだけを出すため） |
+| `{"rag_questions": []}` | 空の結果を保存して終了コード0 | ○ |
+| evaluate の引数を逆に渡した | `Error: invalid StudentSearchResults data at search_results: Field required` | ○ |
+| evaluate の `dataset_path` に Unanswered、空、別のデータセット | `Warning: no question_id matched. ...` ＋ `Matched 0 of N` | ○ |
+| 検索結果の `question_id` が重複 | **後ろが勝つ**（辞書で上書き）。後ろが空なら黙って recall が下がる（docs @5 0.870 → 0.860） | △ |
+| 位置が負・`first > last`・ファイルより長い | pydantic がそのまま通す（`"5"` や `2.0` も int にする）。evaluate は黙って0点、answer は Python のスライスで黙って違う本文になる（`t[-3:-1]` は末尾、`t[5:2]` は空、`t[2:99]` は最後まで） | ✕（自分の出力では起きない。外から渡された入力だけ） |
+| answer_dataset に Unanswered のデータセット | `Error: invalid StudentSearchResults data at search_results: Field required`（モデルを読み込む前に止まる。3秒） | ○ |
+
+#### 14-4. index の入力（`raw_dir`）
+
+| 状態 | 結果 | 評価 |
+|---|---|---|
+| ない、ファイル、対象が0件、空のファイルだけ | `Error: raw_dir is not a directory` / `no .py, .md or .txt files` / `no readable text` | ○ |
+| 読めないファイル（権限） | `Warning: skipped ...: [Errno 13] Permission denied` を出して続ける | ○ |
+| **読めないサブディレクトリ** | **ワーニングなしで黙って飛ばす**。`pathlib` の `rglob`（Python 3.10）が `PermissionError` を捕まえて `return` している（`/usr/lib/python3.10/pathlib.py` の `_RecursiveWildcardSelector._iterate_directories`） | △ |
+| 壊れたシンボリックリンク（`broken.py`）、`dir.py` という名前のディレクトリ | `is_file()` が False なので対象外 | ○ |
+| シンボリックリンクのループ | 止まらずに正常終了（`rglob` はシンボリックリンクのディレクトリの中に入らない） | ○ |
+| **名前が UTF-8 でないファイルが1つ**（`bad\xffname.md`） | 読み込みは通るが、保存の JSON 化で `Error: Error serializing to JSON: UnicodeEncodeError: ... surrogates not allowed`。**1ファイルのせいで index 全体が失敗する**。しかもワーニングは「不完全かもしれない」と言うが、実際は `chunks.json` を書く前に落ちていて何も書いていない | ✕ |
+| 作業ディレクトリの外の `raw_dir` | `file_path` が `../../../tmp/...` になる（Q7 のとおり。grader とは合わない） | ○（仕様） |
+
+#### 14-5. 書き込み
+
+| 状態 | 結果 | 評価 |
+|---|---|---|
+| 保存先が読み取り専用 | `Warning: saving failed; ... may be incomplete.` ＋ `Error: [Errno 13] Permission denied` | ○ |
+| 保存先の下を作れない、保存先がファイル | `Error: [Errno 13]` / `[Errno 17] File exists` | ○ |
+| index の `processed_dir` の途中がファイル | `Error: processed_dir is not a directory path (a file is in the way): ...` | ○ |
+| **書き込みの途中で失敗**（ディスクがいっぱいの代わりに `ulimit -f` で再現） | search_dataset：ワーニング＋`Error: [Errno 27] File too large`、4096バイトの切れたファイルが残る。index：ワーニング＋エラー、51,200バイトの切れた `chunks.json` が残る（次の search は 14-2 の「途中で切れている」になる） | ○（Q9・Q13 の設計どおり） |
+| **保存先が入力と同じディレクトリ** | 出力のファイル名が入力と同じなので、**入力を黙って上書きする**。search_dataset はデータセットが検索結果に、answer_dataset は検索結果が答えつきに置き換わる。終了コード0、ワーニングなし | ✕ |
+
+#### 14-6. answer（Qwen）
+
+| 状態 | 結果 | 評価 |
+|---|---|---|
+| 通常（初回はモデルをダウンロード） | 37秒（ダウンロード込み）。2回目以降は1問あたり約5秒（CPU） | ○ |
+| ネットにつながらず、キャッシュもない（`HF_HUB_OFFLINE=1`） | `Error: We couldn't connect to 'https://huggingface.co' ...`（**2行**） | ○（1行ではない） |
+| ヒットが0件（`日本語の質問`） | 空のコンテキストで Qwen を呼び、**それらしい答えを作る**（`日本語の質問とは、...`）。システムプロンプトの「コンテキストにないと言え」に従わない。search と違ってメッセージも出ない | △ |
+| answer_dataset の入力が空 | 空の結果を保存。モデルは読み込む（5秒） | ○ |
+| answer_dataset の途中でソースのファイルがない | 3問目で `Error: [Errno 2] ...`。**1・2問目の答えも捨てて何も保存しない** | ✕ |
+| answer_dataset の途中で Ctrl+C | 終了コード130、**何も保存しない** | △（100問なら約8分ぶんが消える） |
+| 索引を作ったときと別の作業ディレクトリから answer | search は動く（位置を出すだけ）。answer は `file_path` が相対パスなので `Error: [Errno 2] No such file or directory: 'data/raw/...'`（Q11 の未決事項が実際に起きる） | △ |
+
+#### 14-7. 外からの要因
+
+| 状態 | 結果 | 評価 |
+|---|---|---|
+| Ctrl+C（index の処理中） | 何も出さずに終了コード130。`processed_dir` は空のまま（mkdir だけ済んでいる） | ○ |
+| Ctrl+C（index の保存中） | ワーニングを出して終了コード130（`except BaseException` が効いている） | ○ |
+| SIGTERM | 何も出さずに終了コード143（Python の既定。ハンドラはない） | ○ |
+| パイプが閉じられた（`search ... --k 14638 \| head -1`） | `Error: [Errno 32] Broken pipe`、終了コード120（終了時の標準出力の flush も失敗したことを示す Python の終了コード） | △ `head` で切るのはふつうの使い方なのにエラーと出る |
+| エラーと進捗バー | `Error: ...` が進捗バーと同じ行に続けて出る（tqdm が改行していないため） | △ 見た目だけ |
+
+#### 14-8. 試せなかったもの
+
+- **本物のディスクフル**（`ulimit -f` で代用。どちらも `OSError` なので、通る道は同じはず）
+- **メモリ不足**：多くは OS がプロセスを強制終了する（Q11）。Python では捕まえられない
+- **GPU**：Linux は CPU 専用の torch（`pyproject.toml` の `[tool.uv.sources]`）。CUDA のメモリ不足などは起きない
+- **モデルのダウンロードの途中で切れる**、Hugging Face のキャッシュが壊れる
+- **index と search を同時に実行**（書き込み中の `chunks.json` を読む）
+- **k が大きい answer**：ソースは最大2000文字なので、k=100 なら約20万字。Qwen3-0.6B の文脈の長さ（32,768トークン）を超えうる。CPU では時間もかかる
+
+#### 14-9. 見つかった問題のまとめ（直すかは未決）
+
+| # | 問題 | 重さ | 直し方の案 |
+|---|---|---|---|
+| 1 | 保存先が入力と同じだと、入力を黙って上書きする（14-5） | ✕ | **実装済み（2026-10-31）**：`__main__.check_not_overwritten(input_path, save_directory)`。`save_directory/入力の名前` と入力を `resolve()` で比べ、同じなら `Error: --save_directory ... would overwrite the input ...; choose another directory`。search_dataset と answer_dataset の入口で呼ぶ（検索やモデルの読み込みの前に止まる）。末尾の `/`、`./`、シンボリックリンク、相対パスと絶対パスの組み合わせでも止まることを確認。ユーザーの最初の案（`handle_path_duplicated`）は、ファイルとディレクトリを文字列で比べていて上書きを止められなかった。index（`raw_dir` と `processed_dir`）と evaluate（2つの入力）のチェックは、上書きが起きないので外した |
+| 2 | answer_dataset は1問の失敗や Ctrl+C で、それまでの答えを全部捨てる（14-6） | ✕ | 読めないソースはその問だけ飛ばす・空にして続ける。または途中まで保存する |
+| 3 | 名前が UTF-8 でないファイル1つで index 全体が失敗し、ワーニングの内容も事実と違う（14-4） | ✕ | 読み込みと同じく、そのファイルを警告して飛ばす（vLLM には該当なし） |
+| 4 | 索引の不整合のメッセージが分かりにくい（`list index out of range` など）。`chunks.json` が長い場合は黙って違う結果（14-2） | △〜✕ | 読み込みで件数を比べ、`the index is broken; run index again` にまとめる |
+| 5 | 位置の値を確かめない（負・逆順・範囲外）（14-3） | ✕（外の入力だけ） | `MinimalSource` に `first <= last`、0以上の検証を足す |
+| 6 | ヒット0件の answer が、それらしい答えを作る（14-6） | △ | Qwen を呼ばずに「ソースが見つからなかった」と返す |
+| 7 | 読めないサブディレクトリを黙って飛ばす（14-4） | △ | `os.walk` の `onerror` などで警告する |
+| 8 | パイプが閉じられるとエラーになる（14-7） | △ | `BrokenPipeError` を捕まえて静かに終わる |
+| 9 | `question_id` の重複で後ろが勝つ（14-3） | △ | evaluate で重複を警告する（moulinette の扱いは不明） |
+
+- どれも**トレースバックは出ない**ので、課題の VI.6 の要件はすでに満たしている。上は「データが消える・結果が黙って変わる」の観点の問題
+- **2〜9 は Q15 で実装済み**
+
+### Q15. 14-9 の 2〜9 を実装（2026-10-31）
+
+- **ユーザーの決定**（4つとも Claude のおすすめ）：
+    - #2 answer_dataset で読めないソースは、**その問だけ飛ばす**（全問を最後まで続けて保存する）
+    - #2 の続き：Ctrl+C は**今のまま**（保存しない、終了コード130）
+    - #6 ヒット0件は **Qwen を呼ばない**
+    - #5 **`MinimalSource` で位置を検証する**
+
+| # | ファイル | 実装 |
+|---|---|---|
+| 2 | `answer.py` | `answer()` でソースを1つずつ `read_source` し、`(OSError, ValueError)` なら `Warning: skipped a source of question <id>: <理由>`（`tqdm.write`）を出して飛ばす。全部読めなければ Qwen を呼ばず、答えは `UNREADABLE_ANSWER`（`None of the retrieved sources could be read.`）。`retrieved_sources` は入力のまま（読めなかったものも残す）。`read_source` は、`last_character_index` がファイルの長さを超えると `ValueError` |
+| 3 | `index.py` | `file_path.encode("utf-8")` が `UnicodeEncodeError` なら `Warning: skipped <パス>: the file name is not UTF-8` で飛ばす。あわせて `dump_json` を `try` の前に出した（「書く前にすべて作る」というコメントのとおりにし、JSON 化の失敗で「不完全かもしれない」と出ないようにした） |
+| 4 | `search.py` | `chunks.json` と `bm25/` の読み込みを `try` で囲み、`(OSError, ValueError)`（pydantic の `ValidationError` も orjson の `JSONDecodeError` も `ValueError` の仲間）と、件数の不一致（`bm25.scores["num_docs"] != len(sources)`）を、どちらも `the index under <dir> is broken or incomplete; run the index command again` にする。`chunks.json` がないときは今までどおり `no index under ...` |
+| 5 | `data_models.py` | `first_character_index`、`last_character_index` を `Field(ge=0)`、`model_validator(mode="after")` で `first <= last`。メッセージは pydantic の様式のまま（`... first_character_index: Input should be greater than or equal to 0`） |
+| 6 | `answer.py` | `retrieved_sources` が空なら、Qwen を呼ばずに `NO_SOURCE_ANSWER`（`No source in the corpus matches the question.`） |
+| 7 | `index.py` | `collect_files` を `rglob` から `os.walk(onerror=...)` にし、読めないディレクトリは `Warning: skipped <パス>: Permission denied`。`os.walk` も既定ではシンボリックリンクのディレクトリをたどらない |
+| 8 | `__main__.py` | `except BrokenPipeError`：標準出力を `os.devnull` に向け直して（終了時の flush でもう一度失敗しないように）、何も出さずに終了コード1。Python のドキュメントの `SIGPIPE` の節のやり方 |
+| 9 | `evaluate.py` | `question_id` が重複していれば `Warning: N search results repeat a question_id; the last one of each is used` |
+
+- **確認**：
+    - 普通の使い方：`chunks.json`、docs と code の検索結果が、**修正前とバイト単位で同じ**。moulinette は docs @5 0.870、code @5 0.677、`Student data is valid: True`。index 7秒、search_dataset 100問で約8秒
+    - 14-2 の壊れた索引6種類（`bm25/` がない、`chunks.json` が壊れている・途中で切れている・短い・**長い**、`bm25/` が壊れている）が、すべて同じ1行のメッセージになる
+    - answer_dataset：1問目（ソースの1つがファイルより長い）は残りのソースで答え、2問目（全部読めない）は `None of the retrieved sources could be read.`、3問目（0件）は `No source in the corpus matches the question.`。終了コード0で保存される
+    - パイプ：`search ... | head -1` で標準エラー出力は空、終了コード1
+    - flake8、mypy（`src`）は通る
+- **残っていること**：
+    - 単一の `answer` でヒットが0件でも、Qwen のモデルは読み込む（約10秒）。`__main__` で `SmallLLMModel()` を `answer()` の前に作っているため。答えは決まった文になる
+    - `make lint` の mypy は、リポジトリの直下に展開された `vllm-0.10.1/` を調べて止まる（`Duplicate module named "utils"`）。コードの問題ではない
 
 ## 2. 答え合わせしていない確認の質問
 
@@ -252,11 +403,14 @@
 5. 確認を保存の後に書いたら、`raw_dir` が空のとき `processed_dir` に何が残るか
 6. Fire の `ERROR:` と、こちらの `Error:` の終了コードはそれぞれいくつで、スクリプトから見分けるにはどうするか
 7. CRLF のファイルを `open(..., newline="")` で読むようにしたら、index と answer のどちらも変えないといけないのはなぜか
+8. `chunks.json` が `bm25/` より短いと `list index out of range` になるのに、長いとエラーにならないのはなぜか
+9. 名前が UTF-8 でないファイルは `read_text` では読めるのに、保存で落ちるのはなぜか（ヒント：surrogateescape）
 
 ## 3. 次にやること
 
 - `make run`、`make debug` の `ARGS`（Q6、返事待ち）
-- 試していないもの（Ctrl+C、モデルのダウンロードの失敗、`bm25/` だけが欠けた索引、壊れた `chunks.json`、読み取り専用の保存先）を確かめるか
+- ~~試していないもの（Ctrl+C、モデルのダウンロードの失敗、`bm25/` だけが欠けた索引、壊れた `chunks.json`、読み取り専用の保存先）を確かめるか~~ → Q14 で確認済み
+- Q14 の 14-9 の問題（入力の上書き、answer_dataset が全部捨てる、など）を直すか、どれを直すか
 - ファイルを書くオペレーションで、エラー時に出力先の確認を促すワーニングを出す（Q9、未実装）
 - index で全チャンクのトークンが0個ならエラー。確認は保存の前（Q10、未実装）
 - コミット

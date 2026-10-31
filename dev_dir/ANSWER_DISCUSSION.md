@@ -206,7 +206,7 @@
 - ~~本文の取り出し方~~ → `read_source`（済み）
 - ~~動かす場所と精度~~ → `torch.accelerator`、GPU は bfloat16、CPU は float32（済み）
 - ~~モデルの読み込みを1回で済ませる作り~~ → 案A：`answer(retrieved, llm)` に `SmallLLMModel` を渡す（済み）
-- プロンプトの組み立て（`SYSTEM_PROMPT`、コンテキストの並べ方、出典の示し方）
+- プロンプトの組み立て（`SYSTEM_PROMPT`、コンテキストの並べ方、出典の示し方）→ コンテキストは本文だけ（済み）。`SYSTEM_PROMPT` は Q4 で5案を比べた。A2 に書き換えるかは未決
 - トークンの予算（チャンクを何件・何トークンまで入れるか）
 - **Qwen3 の thinking を使うか**（2026-10-27 タスクに追加、ユーザーの指示）：今は `enable_thinking=False`。LLM は黙って考えられず、思考は `<think>`〜`</think>` の文章を実際に生成すること。「思考させて、過程は出力しない」は、全部生成してから `</think>`（id 151668）より前を捨てれば実現できる。`False` にした理由（破棄した実装で Claude が選んだもの）：時間（思考は数百〜数千トークン）、`max_new_tokens=256` で答えの前に打ち切られる危険、後処理が要る。ただし思考で答えの質が上がる可能性（複数のコンテキストの見比べ）はある → **同じ質問いくつかで、思考あり／なしの答えと時間を比べて決める**。思考ありにするなら `max_new_tokens` も見直す
     - **thinking を使うときの懸念点**（2026-10-27 ユーザーの指示で記録）：
@@ -276,6 +276,64 @@
     - モデルのキャッシュは `~/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B`（`du -shL` で 2.8G。シンボリックリンクの二重計上を含む可能性あり）
 - 答えの中身：「`VLLM_ALLOW_RUNTIME_LORA_UPDATING` を `True` にする」。資料の中にある記述だが、これは**実行中に LoRA を差し替える機能**の話で、質問への一番素直な答え（LoRA を有効にする方法）とはずれている可能性が高い（正解は未確認）→ プロンプトや渡すチャンクの工夫が要る
 
+### Q4. `SYSTEM_PROMPT` を説明できるか、1文ずつ要るのか（2026-10-31、校舎の Linux）
+
+- **きっかけ（ユーザー）**：レビューで `SYSTEM_PROMPT` の理由を説明できる自信がない。公式のドキュメントから借りたのなら「借りた」と言えるが、そうでないなら、1文ずつの根拠が要る
+- **出どころ**：公式のドキュメントから借りたものではない。最初の案は破棄した実装で Claude が書き、リンクの幻覚の調査で直した（「0. 共同で決めた設計」の幻覚の項）
+- **よく似た有名なプロンプト**：LangChain のハブの `rlm/rag-prompt`（LangChain の公式 cookbook で `hub.pull("rlm/rag-prompt")` として使われ、LlamaIndex のドキュメントでも使われる）。本文は第三者の転載で確認（最新の正確な本文はハブのページで確かめる）："You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. If you don't know the answer, just say that you don't know. Use three sentences maximum and keep the answer concise."。構成（役割・コンテキストだけを使う・知らなければそう言う・短く）が今のプロンプトとほぼ同じ
+- **`role` と `content`**：`role` は誰の発言か、`content` はその中身。`apply_chat_template` が Qwen の形式（`<|im_start|>system\n...<|im_end|>\n<|im_start|>user\n...`）の1本の文字列にする。**Qwen3 のテンプレートは、system がなければ何も足さない**（ダウンロード済みのトークナイザーで表示して確認。Qwen2.5 の `You are Qwen, ...` のような既定の文はない）。system が要らなければ、要素ごと外せばよい（`content` を空にする必要はない）
+- **thinking とは無関係**：考えるかどうかは `enable_thinking=False`（テンプレートが空の `<think>\n\n</think>` を入れる）で決まる。system の有無とは関係ない
+- **課題の趣旨**：VI.3 は "grading prioritizes retrieval quality, grounding and **prompt strategy**" なので、プロンプトの工夫は評価の対象。ただし grounded を実現しているのは、user のメッセージに取ってきた本文だけを入れていること。system prompt は念を押す程度
+- **ユーザーの決定（実験の前）**：
+    - 「Answer in a few sentences; do not write links or file paths.」の後半（リンクとパス）を削除。この文だけではほぼ効かなかった（11問中9問でリンクが残った。効いたのはコンテキストからパスを外したこと）
+    - 「If it does not contain the answer, say that the context does not contain it.」も削除する（弱いならレビューで突っつかれる理由になるため）。`NO_SOURCE_ANSWER` が扱うのはヒット0件だけで、この文が働くのは「ヒットはあるが答えがない」とき全般（的外れなヒット、話題は合っているが聞かれた事実がない、ソースの一部が読めなかった）。ただしモデルが従うかしだい
+
+#### 実験：system prompt の案を比べる
+
+- **方法**：16問（docs 8問、code 4問、関係のない質問4問：フランスの首都、Pride and Prejudice の作者、サワードウの焼き方、水の沸点の華氏）。ヒットは本番と同じ `search_dataset --k 10` のラン（関係のない質問は `search --k 10` 相当）。CPU（float32）、貪欲法なので同じ入力なら毎回同じ答え。スクリプトは scratchpad の `prompt_exp.py`（プロジェクトの外）
+- **指標**：時間、答えの文字数（中央値）、**根拠率**（答えのトークンのうち、コンテキストにも出てくるものの割合。`src/tokenizer.py` の `tokenize` で数える目安）、断った数、リンクやパスを書いた数。docs と code は正解データの `answer` とも見比べた
+- **案**：
+
+| 案 | system |
+|---|---|
+| A | 今のまま：`You answer questions about the vLLM codebase. Use only the context given by the user. If it does not contain the answer, say that the context does not contain it. Answer in a few sentences.` |
+| A2 | A から「If it does not contain...」を消したもの：`You answer questions about the vLLM codebase. Use only the context given by the user. Answer in a few sentences.` |
+| B | `Use only the context given by the user.` だけ |
+| C | system なし |
+| D | `Answer in a few sentences.` だけ |
+
+- **結果**：
+
+| 種類 | 案 | 秒 | 文字数 | 根拠率 | 断った | リンク |
+|---|---|---|---|---|---|---|
+| docs | A | 22.1 | 144 | 0.935 | 0 | 1 |
+| | A2 | 21.5 | **110** | 0.926 | 0 | 1 |
+| | B | 30.8 | 258 | 0.908 | 0 | 1 |
+| | C | 32.6 | 369 | 0.889 | 0 | 1 |
+| | D | 33.1 | **488** | 0.869 | 0 | 1 |
+| code | A | 23.4 | 122 | 0.861 | 0 | 0 |
+| | A2 | 23.1 | 122 | 0.849 | 0 | 0 |
+| | B | 25.9 | 172 | 0.870 | 0 | 0 |
+| | C | 28.6 | 210 | 0.861 | 0 | 0 |
+| | D | 27.2 | 250 | 0.854 | 0 | 0 |
+| 関係のない質問 | A | 24.9 | 126 | 0.443 | 1（一部） | 0 |
+| | A2 | 22.4 | 69 | 0.662 | 0 | 0 |
+| | B | 27.5 | 81 | 0.625 | 0 | 0 |
+| | C | 26.9 | 81 | 0.625 | 0 | 0 |
+| | D | 35.3 | 496 | 0.353 | 0 | 0 |
+
+- 断った数の判定は正規表現。docs B で1件引っかかったものは断りではなかったので0にした
+- **分かったこと**：
+    1. **3文のセット（A2）は効く**：system なし（C）に比べて、docs の答えが約1/3（110 対 369文字）、時間が約3割短い
+    2. **1文ずつの効果は再現しない**：`Answer in a few sentences.` だけ（D）では、むしろ C より長い（488 対 369）。`Use only the context...` だけ（B）は C と答えがほぼ同じ（関係のない質問4問は一字一句同じ）。**Claude は D を測る前に「a few sentences が効いている」と結論づけたが、D の結果で誤りと分かった**。どの文が効いているかは言えない
+    3. **「If it does not contain...」は弱い**：断りかけたのは4問中1問（A のフランスの首都。話をそらしただけで、断ってはいない）。削除の判断と合う
+    4. **リンクの幻覚はどの案でも同じ**：「Where can I find information about using generative models in vLLM?」は5案すべてでリンクを作った（質問が「どこで見られるか」と聞いているため）。リンクの文を消しても悪くなっていない
+    5. **正しさはどの案でも大きく変わらない**：対応ハードウェアは A2 が「AMD CPUs」と誤り、D はほぼ正しい。MoE の並列化は A2 が正解に近く（tensor と expert）、D は誤り（TP と PP）。`FP8_MIN`/`FP8_MAX`（正解は `float8_info.min`/`max`）と `trust_remote_code`（正解は `False`）は、両方とも誤り（0.6B の限界）
+    6. **コンテキストに忠実すぎて間違える**：水の沸点には、A〜C の4案すべてが「ダラスの天気は85°F」と答えた（コンテキストにある天気の例を使った）。D だけが 212°F と正しく答えた（自分の知識で答えたので、根拠率は低い）。関係のない質問を断れない問題は、プロンプトでは直らない
+- **注意**：16問と少ない。1台のマシン（CPU）。根拠率は目安で、答えが短いほど高く出やすい（コンテキストを写す割合が上がるため）ので、案どうしの根拠率の差は「効果があった」とは言えない
+- **Claude のおすすめ**：A2。レビューでは「標準的な RAG のプロンプトの型（役割、コンテキストだけを使う、短く）に沿って書き、system なしや1文だけの案と16問で比べた。3文のセットが、正しさを変えずに答えを約1/3に短くした。1文だけでは同じ効果は出なかった」と説明する。1文ずつの理由は言わない
+- **未決**：`SYSTEM_PROMPT` を A2 に書き換えるか（`src/answer.py` には、この記録の時点で「If it does not contain...」が残っている）
+
 ---
 
 ## 2. 答え合わせしていない確認の質問
@@ -293,4 +351,5 @@
 
 ## 4. README に使えるポイント
 
-（ここから追記）
+- **Prompt strategy**（Q4）：標準的な RAG のプロンプト（LangChain の `rlm/rag-prompt`）と同じ型。グラウンディングは、コンテキストに取ってきた本文だけを入れる（パスもリンクも入れない）ことで実現している。system prompt は5案を16問で比べ、3文のセットが、正しさを変えずに答えを約1/3、時間を約3割短くした。1文だけでは同じ効果は出なかった。ヒットが0件や全部読めないときは、モデルを呼ばずに決まった文を返す（作り話を防ぐ）
+- **Challenges**（Q4）：0.6B は関係のない質問を断れない。コンテキストに忠実すぎて間違えることもある（水の沸点に、コンテキストの天気の例で答えた）

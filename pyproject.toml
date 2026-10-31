@@ -16,7 +16,8 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-	"pytest"
+	"pytest",
+	"types-tqdm>=4.70.0.20260906",
 ]
 
 # On Linux, PyPI's torch is a CUDA build that pulls about 2.3 GB of NVIDIA
@@ -37,3 +38,9 @@ explicit = true
 # sources under data/raw/, which are not our code.
 [tool.mypy]
 exclude = ["^data/"]
+
+# bm25s and fire ship no type information (no py.typed, no stub package),
+# so `mypy --strict` cannot analyze them. Treat only these two as untyped.
+[[tool.mypy.overrides]]
+module = ["bm25s", "bm25s.*", "fire"]
+ignore_missing_imports = true

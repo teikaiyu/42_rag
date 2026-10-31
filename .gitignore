@@ -6,9 +6,6 @@ __pycache__/
 # Virtual environment (recreated by `uv sync`)
 .venv
 
-# Local tests (not submitted or graded, subject V.3)
-tests
-
 # Corpus, index and outputs: generated during evaluation (subject X: no large data files or generated outputs)
 data/
 

@@ -26,10 +26,21 @@ def search(
         raise FileNotFoundError(
             f"no index under {processed_dir}; run the index command first"
         )
-    sources = TypeAdapter(list[MinimalSource]).validate_json(
-        (out / CHUNKS_FILE).read_bytes()
+    # A failed or mixed-up index (chunks.json and bm25/ from different runs)
+    # cannot be used; ids would point to the wrong chunks or past the end.
+    broken = ValueError(
+        f"the index under {processed_dir} is broken or incomplete; "
+        f"run the index command again"
     )
-    bm25 = bm25s.BM25.load(str(out / BM25_DIR))
+    try:
+        sources = TypeAdapter(list[MinimalSource]).validate_json(
+            (out / CHUNKS_FILE).read_bytes()
+        )
+        bm25 = bm25s.BM25.load(str(out / BM25_DIR))
+    except (OSError, ValueError):
+        raise broken from None
+    if bm25.scores["num_docs"] != len(sources):
+        raise broken
     # bm25s rejects a k larger than the number of chunks.
     ids, scores = bm25.retrieve(
         [tokenize(question.question)], k=min(k, len(sources)), sorted=True,
