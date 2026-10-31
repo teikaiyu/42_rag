@@ -2,10 +2,10 @@ install:
 	uv sync
 
 run:
-	@uv run python -m src
+	@uv run python -m src $(ARGS)
 
 debug:
-	uv run python -m pdb -m src
+	uv run python -m pdb -m src $(ARGS)
 
 clean:
 	@find . -name __pycache__ -not -path "./.venv/*" -prune -exec rm -rf {} +

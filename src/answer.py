@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 import torch
@@ -119,5 +120,10 @@ def answer_dataset(
     out = Path(save_directory)
     out.mkdir(parents=True, exist_ok=True)
     path = out / Path(student_search_results_path).name
-    path.write_text(answers.model_dump_json(indent=2), encoding="utf-8")
+    try:
+        path.write_text(answers.model_dump_json(indent=2), encoding="utf-8")
+    except BaseException:
+        print(f"Warning: saving failed; {path} may be incomplete.",
+              file=sys.stderr)
+        raise
     return path

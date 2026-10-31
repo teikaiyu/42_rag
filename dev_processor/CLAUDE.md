@@ -2,7 +2,7 @@
 
 vLLM 0.10.1 のリポジトリを対象にした RAG システムの課題。要件の全文は `subject.RAG_against_the_machine.en.pdf`（v2.0、英語の原文）を参照。翻訳を挟まないため、これを正とする。
 このファイルは、これまでの議論で決まったこと・分かったこと・未決事項をまとめたもの。
-`index` 実装以降の議論（質問ごと、未回答の確認の質問、次にやること）は `INDEX_DISCUSSION.md` にある。`search` の議論は `SEARCH_DISCUSSION.md`、`evaluate` の議論は `EVALUATE_DISCUSSION.md`、`answer` の議論は `ANSWER_DISCUSSION.md` にある。
+`index` 実装以降の議論（質問ごと、未回答の確認の質問、次にやること）は `INDEX_DISCUSSION.md` にある。`search` の議論は `SEARCH_DISCUSSION.md`、`evaluate` の議論は `EVALUATE_DISCUSSION.md`、`answer` の議論は `ANSWER_DISCUSSION.md`、エラー処理の議論は `ERROR_DISCUSSION.md` にある。
 
 ## 進め方のルール（最重要）
 
@@ -45,13 +45,13 @@ vLLM 0.10.1 のリポジトリを対象にした RAG システムの課題。要
 | パート | 状態 | 議論メモ |
 |---|---|---|
 | データモデル（`data_models.py`） | 済み。課題の8モデルのみ（`Chunk` は削除） | — |
-| index（`index.py`、`chunker.py`、`tokenizer.py`） | 済み。調整は evaluate の後に戻る | `INDEX_DISCUSSION.md` |
+| index（`index.py`（chunker を統合）、`tokenizer.py`） | 済み。調整は evaluate の後に戻る | `INDEX_DISCUSSION.md` |
 | search / search_dataset（`search.py`） | 済み。小さな未決事項あり | `SEARCH_DISCUSSION.md` |
 | evaluate（`evaluate.py`） | 済み（2026-10-23 に一旦終了） | `EVALUATE_DISCUSSION.md` |
 | answer / answer_dataset | **着手**（2026-10-24〜）。transformers と PyTorch を使う | `ANSWER_DISCUSSION.md` |
 | index の調整（overlap、トークン化、BM25 のパラメータ、隠しディレクトリ） | 未着手。evaluate ができたので着手できる | `INDEX_DISCUSSION.md` の「3」 |
 | search の未決事項（点数0の結果、`search` の出力の解釈） | 未決 | `SEARCH_DISCUSSION.md` |
-| エラー処理（全コマンドまとめて） | 未着手。各メモの「既知の問題」「未決事項」に一覧 | 各メモ |
+| エラー処理（全コマンドまとめて） | **済み（2026-10-28）**。下の「エラー処理の方針」を参照 | `ERROR_DISCUSSION.md` |
 | moulinette との比較 | 後回し（Mac では動かない。校舎の Linux で） | `EVALUATE_DISCUSSION.md` |
 | **審査の Linux マシンのデバイスの確認と、torch の指定の判断** | 後回し（校舎の Linux で）。NVIDIA の GPU があるかを確かめ、今の「Linux は CPU 専用の torch」（`pyproject.toml` の `[tool.uv.sources]`）のままでよいかを決める。あわせて `uv sync` と answer が Linux で動くかも確かめる | `ANSWER_DISCUSSION.md` |
 | README | 未着手。各メモの「README に使えるポイント」が材料 | 各メモ |
@@ -59,6 +59,17 @@ vLLM 0.10.1 のリポジトリを対象にした RAG システムの課題。要
 
 - 公開データでの recall@5（自作の evaluate）：**docs 0.870、code 0.677**（基準：docs 80%、code 50%）
 - index：1969ファイル、14638チャンク、約2秒。`search_dataset`：100問で約2.5秒
+
+## エラー処理の方針（2026-10-28 実装）
+
+- **最後の砦**：`__main__.main()` で `fire.Fire` を囲み、`KeyboardInterrupt` → 終了コード130、pydantic の `ValidationError` → `Error: invalid <モデル名> data at <場所>: <要点>`、それ以外の `Exception` → `Error: <メッセージ>`、いずれも標準エラー出力に1行で、終了コード1（2026-10-30 に一度外したが、2026-10-31 に「一旦完成させる」ため戻した。ユーザーの決定）。`FireExit`（`--help` や使い方の誤り）は `SystemExit` の仲間なので捕まえない（Fire が使い方を出して終了コード2）
+- **CLI の入口での確認**（`__main__.py`）：`positive_int`（`--k`、`--max_chunk_size`。bool は弾く。`--max_chunk_size` は2000まで）、`question_of`（空・空白だけのクエリはエラー。数字だけのクエリは文字列にする）。`--k 0` は search、search_dataset、answer のすべてでエラーメッセージ（ユーザーの決定。課題 VI.6 "The CLI is tested with such edge cases"）
+- **index**：`raw_dir` がない・ディレクトリでない・対象ファイルが0件 → エラー（何も保存しない）。1ファイルが読めない（`UnicodeDecodeError`、`OSError`）→ 警告を出して飛ばす。読めたチャンクが0件 → エラー。`file_path` は `os.path.relpath` で作業ディレクトリからの相対パスにする（絶対パスの `raw_dir` でも `data/raw/...`。chunks.json は変更前とバイト単位で同じことを確認）
+- **chunker（`index.py` 内）**：overlap は `min(200, max_chunk_size // 2)`（小さいチャンクでも動く。既定の2000では200のまま）。langchain の位置が本文と合わないチャンクは飛ばす（vLLM では0件）
+- **search**：`chunks.json` がなければ「no index under ...; run the index command first」。`k` がチャンク数より大きければ切り詰める
+- **CRLF**：今のまま（index も answer も `read_text` で改行を `\n` に直すので、自分の中ではそろう）。CRLF のファイルは4つ（例：`tests/test_seed_behavior.py`）、公開のグラウンドトゥルースには出てこない（ユーザーの決定）
+- 確かめた結果：最初に試した16個のトレースバックが、すべて1行のメッセージになった。recall は変わらず（docs @5 0.870）
+- 試していないもの：Ctrl+C、モデルのダウンロードの失敗（ネットがない）、`bm25/` だけが欠けた索引、`chunks.json` が壊れた索引（いずれも最後の砦で1行のメッセージになるはず）
 
 ## 現在のリポジトリの状態
 
